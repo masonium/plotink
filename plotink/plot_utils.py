@@ -749,3 +749,107 @@ def pathdata_last_point(path):
     y_val = params[-1] # Last parameter given
 
     return [x_val,y_val]
+
+def _segments_reverse_subpath(path_segments):
+    """
+    Given a list of segments of a single subpath, return a
+    geometrically-equivalent subpath that reverse the order of the
+    segments. In particular, the first point of the original subpath
+    will be the last point of the returned subpath, and vice-versa.
+
+    Input: A non-empty list of subpath segments, as returned by simplepath.parsePath.
+           (A subpath must be of the form M(LCQAZ)* .)
+    Output: A geometrically-equivalent subpath, as segments,
+            with the segments and their ordering reversed.
+
+    """
+    assert(path_segments[0][0] == "M")
+    first_point = path_segments[0][1]
+
+    # The current uncompleted segment. We use the convenient fact
+    # that, for all relevant commands (except 'Z', which we will
+    # transform into 'L'), the last two points are always the endpoint
+    # of the segment. So, once we know where the end point is, we can
+    # just attach it to the end to have a full new segment.
+    current_partial_segment = ['M', []]
+
+    # We can traverse the segments in reverse order, with the caveat
+    # that we use the 'next' segment to determine the end point of the
+    # current segment.
+    new_path = []
+    for segment in reversed(path_segments):
+        # 'normalize' Z-paths into lines
+        if segment[0] == 'Z':
+            seg = ['L', first_point]
+        else:
+            seg = segment
+
+        last_point = [seg[1][-2], seg[1][-1]]
+
+        # Complete the current partial segment, add it to the path,
+        # and create a new partial segment.
+        current_partial_segment[1].extend(last_point)
+        new_path.append(current_partial_segment)
+
+        # create a new sgement
+        current_partial_segment = [seg[0], []]
+
+        # add any necessary pieces
+        if seg[0] == 'L':
+            # for lines, we don't need to do anything, as they don't
+            # take anything besides the destination point
+            pass
+        elif seg[0] == 'Q':
+            # quadratic beziers: The reverse of 'Q b c' starting at a is simply
+            # 'Q b a' starting at c. So, we only need to add the control point
+            current_partial_segment[1] = seg[1][:2]
+        elif seg[0] == 'C':
+            # cubic beziers: Similarly, the reverse of 'C b c d' starting at a is simply
+            # 'C c b a' starting at d.
+            current_partial_segment[1] = [seg[1][2], seg[1][3], seg[1][0], seg[1][1]] # [cx cy bc by]
+        elif seg[0] == 'A':
+            # Arcs of the form A rx,ry x-axis-rotation large-arc-flag
+            # sweep-flag x y When reversing, everything stays the same
+            # except the sweep-flag, which must be inverted ( 0->1 and
+            # 1->0).
+            current_partial_segment[1] = seg[1][:-3]
+            sweep_flag = seg[1][-3]
+            current_partial_segment[1].append(0 if sweep_flag else 1)
+        elif seg[0] == 'M':
+            # Including M for completeness.
+            #
+            # By precondition, this must be the last segment, so we don't need to do anything.
+            pass
+
+    return new_path
+
+def pathdata_reverse(path):
+    """
+    Return the geometrically equivalent path, with all segments in
+    (and drawn in) reverse order.
+
+    Input: A path data string; the text of the d string of an SVG path.
+    Output: A path data string possibly representing the same
+    geometric path, but with the endpoints reversed.
+
+    Note: pathdata_reverse currently will never return a closed subpath,
+    even if the geometry allows it and the original subpath was closed.
+    Thus for rendering purposes where the stroke cap matters, this
+    function will not produce an exact equivalent render for these paths.
+    """
+
+    parsed_path = simplepath.parsePath(path)
+
+    # group into subpaths, then reverse each subpath
+    subpaths = []
+    current_subpath = [ parsed_path[0] ]
+    for segment in parsed_path[1:]:
+        if segment[0] == "M":
+            subpaths.append(current_subpath)
+            current_subpath = list()
+        current_subpath.append(segment)
+    subpaths.append(current_subpath)
+
+    # reverse each subpath, flatten the segments, and reassemble a path
+    return simplepath.formatPath([segment for subpath in reversed(subpaths)
+                                  for segment in _segments_reverse_subpath(subpath)])
